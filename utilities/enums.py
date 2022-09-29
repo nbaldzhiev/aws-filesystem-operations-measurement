@@ -16,6 +16,14 @@ class AWSEC2FreeTierAMIs(Enum):
     RHEL_8 = "ami-0e7e134863fac4946"
 
 
+class DefaultAMIUsernames(Enum):
+    """Contains constants for the default AMI usernames."""
+
+    AMAZON_LINUX = "ec2-user"
+    RHEL = "ec2-user"
+    UBUNTU = "ubuntu"
+
+
 class AWSEC2FreeTierInstanceTypes(Enum):
     """Contains constants for free tier instance types."""
 

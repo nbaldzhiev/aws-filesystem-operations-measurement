@@ -1,6 +1,7 @@
 """This module contains utility functions for operating with AWS EC2."""
 import logging
 import os
+import stat
 import time
 from typing import Optional, Tuple
 
@@ -19,17 +20,28 @@ class EC2:
 
     def __init__(
         self,
-        aws_access_key_id: str = DefaultAWSEC2Credentials.DEFAULT_AWS_ACCESS_KEY_ID,
-        aws_secret_access_key: str = DefaultAWSEC2Credentials.DEFAULT_AWS_SECRET_ACCESS_KEY,
-        aws_region_name: str = DefaultAWSEC2Credentials.DEFAULT_AWS_REGION,
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_region_name: Optional[str] = None,
         config: Optional[Config] = None,
     ):
-        self.aws_access_key_id = aws_access_key_id
-        self.aws_secret_access_key = aws_secret_access_key
-        self.aws_region_name = aws_region_name
-        if not config:
-            # The default config simply specifies the region name
-            self.config = Config(region_name=self.aws_region_name)
+        # pylint: disable=line-too-long
+        self.aws_access_key_id = (
+            aws_access_key_id
+            if aws_access_key_id
+            else DefaultAWSEC2Credentials.DEFAULT_AWS_ACCESS_KEY_ID
+        )
+        self.aws_secret_access_key = (
+            aws_secret_access_key
+            if aws_secret_access_key
+            else DefaultAWSEC2Credentials.DEFAULT_AWS_SECRET_ACCESS_KEY
+        )
+        self.aws_region_name = (
+            aws_region_name
+            if aws_region_name
+            else DefaultAWSEC2Credentials.DEFAULT_AWS_REGION
+        )
+        self.config = config if config else Config(region_name=self.aws_region_name)
 
         self.resource = boto3.resource(
             AWSServices.EC2.value,
@@ -47,7 +59,8 @@ class EC2:
     def create_key_pair(
         self, key_name: Optional[str] = None, key_file_name: Optional[str] = None
     ) -> Tuple:
-        """Creates an AWS EC2 key pair.
+        """Creates an AWS EC2 key pair. The key file is created in the same directory as this
+        module for simplicity.
 
         Parameters
         ----------
@@ -74,6 +87,9 @@ class EC2:
             logging.info("Created key: %s.", key_pair.name)
             with open(key_file_name, "w") as f:
                 f.write(key_pair.key_material)
+                # Change the permissions of the key file to read by owner only to adjust to the
+                # security requirements of SSHing to an EC2 VM
+                os.chmod(key_file_name, stat.S_IRUSR)
                 logging.info("Wrote private key to file: %s.", key_file_name)
         except ClientError as exc:
             logging.exception("Couldn't create key: %s!", key_name)
@@ -189,8 +205,22 @@ class EC2:
             )
             raise exc
         else:
-            wait_for_running_state and instance.wait_until_running()
-            return instance
+            if wait_for_running_state:
+                logging.info(
+                    "Starting to wait for instance with ID: %s, to pass its status checks...",
+                    instance.id,
+                )
+                # The waiter InstanceStatusOk is definitely slower than InstanceRunning as it waits
+                # for the status checks to complete, but this is necessary in order to avoid some
+                # intermittent SSH connection failures
+                self.client.get_waiter("instance_status_ok").wait(
+                    InstanceIds=[instance.id]
+                )
+                logging.info(
+                    "Instance with ID: %s, has passed its status checks!", instance.id
+                )
+
+            return self.resource.Instance(id=instance.id)
 
     def delete_key_pair(self, key_name: str, key_file_name: Optional[str] = None):
         """Deletes a key pair and the specified private key file.
@@ -235,5 +265,10 @@ class EC2:
         logging.info("Terminating instance: %s...", instance_id)
         instance = self.resource.Instance(instance_id)
         instance.terminate()
-        wait_for_termination and instance.wait_until_terminated()
-        logging.info("Terminated instance: %s...", instance_id)
+        if wait_for_termination:
+            logging.info(
+                "Starting to wait for instance with ID: %s, to be Terminated...",
+                instance.id,
+            )
+            instance.wait_until_terminated()
+        logging.info("Instance with ID: %s, has been terminated!", instance.id)
