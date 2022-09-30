@@ -153,7 +153,7 @@ class EC2:
         image_id: AWSEC2FreeTierAMIs,
         key_name: Optional[str] = None,
         security_groups: Optional[str] = None,
-        wait_for_running_state: bool = True,
+        wait_for_status_ok: bool = True,
     ):
         """Creates a new Amazon EC2 instance. The instance automatically starts immediately after
         it is created.
@@ -168,7 +168,7 @@ class EC2:
         security_groups : Optional[str]
             The names of the security groups to use. Optional, so the function creates a security
             group part of the default VPC with SSH ingress traffic allowed if none is provided.
-        wait_for_running_state : bool
+        wait_for_status_ok : bool
             Controls whether the function would wait for the instance to be running before
             returning. The wait and interval times are the default ones for boto3 - 40 attempts
             polled each 15s. Defaults to true.
@@ -205,7 +205,7 @@ class EC2:
             )
             raise exc
         else:
-            if wait_for_running_state:
+            if wait_for_status_ok:
                 logging.info(
                     "Starting to wait for instance with ID: %s, to pass its status checks...",
                     instance.id,
@@ -272,3 +272,27 @@ class EC2:
             )
             instance.wait_until_terminated()
         logging.info("Instance with ID: %s, has been terminated!", instance.id)
+
+    def reboot_instance(self, instance_id: str, wait_for_status: bool = True):
+        """Terminates an instance. The request returns immediately. To wait for the
+        instance to terminate, use Instance.wait_until_terminated().
+
+        Parameters
+        ----------
+        instance_id : str
+            The ID of the instance to terminate.
+        wait_for_status : bool
+            Controls whether the method waits for the instance to pass its status checks. Defaults
+            to True.
+        """
+        logging.info("Rebooting the instance: %s...", instance_id)
+        self.client.reboot_instances(InstanceIds=[instance_id])
+        if wait_for_status:
+            logging.info(
+                "Starting to wait for instance with ID: %s, to pass its status checks...",
+                instance_id,
+            )
+            self.client.get_waiter("instance_status_ok").wait(InstanceIds=[instance_id])
+            logging.info(
+                "Instance with ID: %s, has passed its status checks!", instance_id
+            )
