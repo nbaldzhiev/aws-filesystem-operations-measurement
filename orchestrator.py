@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import paramiko
 from botocore.config import Config
@@ -24,6 +24,8 @@ class Orchestrator:
     # DefaultAMIUsernames attribute
     AMIS_TO_CREATE = (
         (AWSEC2FreeTierAMIs.AMAZON_LINUX_2, DefaultAMIUsernames.AMAZON_LINUX),
+        (AWSEC2FreeTierAMIs.UBUNTU_SERVER_22_04, DefaultAMIUsernames.UBUNTU),
+        (AWSEC2FreeTierAMIs.RHEL_8, DefaultAMIUsernames.RHEL),
     )
     PERFORM_MEASUREMENTS_BASH_SCRIPT = "perform_measurements.sh"
     SETUP_CRON_BASH_SCRIPT = "setup_cron.sh"
@@ -52,42 +54,36 @@ class Orchestrator:
             config=config,
         )
         self._amis_to_create = amis_to_create
-        # A list of dictionaries where each dict contains the created instance object and the SSH
-        # client object with an established SSH connection to that instance
-        self.created_instances_with_ssh: List[Dict] = []
+        # A list of dictionaries where each dict contains the created instance object together with
+        # the username to log on the instance with
+        self.created_instances = []
+        self.established_ssh_connections: Dict = {}
 
     def __enter__(self) -> Orchestrator:
-        """Creates the VMs based on the AMIs provided in self.amis_to_create, establishes a SSH
+        """Creates the VMs based on the AMIs provided in self.amis_to_create, establishes SSH
         connection to each instance, and returns the class instance upon entering the class as a
         context manager"""
         for ami in self._amis_to_create:
             instance_ = self.ec2.create_instance(image_id=ami[0])
-            ssh_client = Orchestrator._prepare_ssh_client_obj()
-            ssh_client.connect(
-                hostname=instance_.public_dns_name,
-                username=ami[1].value,
-                key_filename=instance_.key_name + ".pem",
-            )
             logging.info(
                 "Successfully established a SSH connection to instance: %s with public DNS of: %s.",
                 instance_.id,
                 instance_.public_dns_name,
             )
-            self.created_instances_with_ssh.append(
-                {
-                    "instance": instance_,
-                    "ssh_client": ssh_client,
-                    "username": ami[1].value,
-                }
+            self.created_instances.append(
+                {"instance": instance_, "username": ami[1].value}
             )
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Closes all SSH sessions, terminates all created EC2 instances, deletes their security
         group and key pairs upon exiting the context manager."""
-        if self.created_instances_with_ssh:
-            for instance_ in self.created_instances_with_ssh:
-                instance_["ssh_client"].close()
+        if self.created_instances:
+            for instance_ in self.created_instances:
+                if instance_["instance"].id in self.established_ssh_connections:
+                    self.established_ssh_connections[instance_["instance"].id][
+                        "ssh_client"
+                    ].close()
                 logging.info(
                     "Successfully closed the SSH section of instance: %s.",
                     instance_["instance"].id,
@@ -116,11 +112,8 @@ class Orchestrator:
         ssh_client.set_missing_host_key_policy(policy=paramiko.client.AutoAddPolicy)
         return ssh_client
 
-    @staticmethod
-    def reconnect_ssh(instance_obj, username: str) -> paramiko.SSHClient:
-        """Re-establishes a SSH connection to a given instance. Typical use case is after an
-        instance has been rebooted.
-
+    def connect_ssh(self, instance_obj, username: str) -> paramiko.SSHClient:
+        """Establishes a SSH connection to a given instance and returns a SSHClient object.
         Parameters
         ----------
         instance_obj : ec2.Instance
@@ -139,10 +132,14 @@ class Orchestrator:
             key_filename=instance_obj.key_name + ".pem",
         )
         logging.info(
-            "Successfully reconnected via SSH to instance: %s with public DNS of: %s.",
+            "Successfully connected via SSH to instance: %s with public DNS of: %s.",
             instance_obj.id,
             instance_obj.public_dns_name,
         )
+        self.established_ssh_connections[instance_obj.id] = {
+            "ssh_client": ssh_client,
+            "username": username,
+        }
         return ssh_client
 
     def transfer_bash_scripts_to_instance(
@@ -213,31 +210,25 @@ class Orchestrator:
         return self
 
     def transfer_results_to_orchestrator_host(
-        self, instance_ssh_client: paramiko.SSHClient
-    ) -> Orchestrator:
+        self, instance_ssh_client: paramiko.SSHClient, instance
+    ) -> Dict:
         """Transfers the results.txt file from the instance to the orchestrator host in the
         same directory as this module for simplicity."""
         scp = SCPClient(instance_ssh_client.get_transport())
-        hostname = ssh.exec_command("cat /etc/hostname")[1].readline().strip()
+        hostname = (
+            instance_ssh_client.exec_command("cat /etc/hostname")[1].readline().strip()
+        )
         target_filename = f"{hostname}-{type(self).RESULTS_FILENAME}"
         # Transfer the bash script over to the instance filesystem
         scp.get(type(self).RESULTS_FILENAME, target_filename)
         logging.info(
-            "Transferred the results file from the instance to this orhestrator host!"
+            "Transferred the results file from the instance to this orchestrator host!"
         )
-        return self
 
-
-with Orchestrator() as orchestrator:
-    for instance in orchestrator.created_instances_with_ssh:
-        orchestrator.transfer_bash_scripts_to_instance(
-            instance_ssh_client=instance["ssh_client"]
-        )
-        orchestrator.run_setup_cron_bash(instance_ssh_client=instance["ssh_client"])
-        orchestrator.ec2.reboot_instance(instance["instance"].id)
-        time.sleep(30)
-        ssh = orchestrator.reconnect_ssh(
-            instance_obj=instance["instance"], username=instance["username"]
-        )
-        orchestrator.wait_for_all_operations_to_complete(instance_ssh_client=ssh)
-        orchestrator.transfer_results_to_orchestrator_host(instance_ssh_client=ssh)
+        return {
+            "results-filename": target_filename,
+            "instance_id": instance.id,
+            "instance_image_id": instance.image_id,
+            "instance_platform": instance.platform_details,
+            "instance_architecture": instance.architecture,
+        }

@@ -6,6 +6,7 @@ import time
 from typing import Optional, Tuple
 
 import boto3
+import paramiko
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
@@ -273,26 +274,79 @@ class EC2:
             instance.wait_until_terminated()
         logging.info("Instance with ID: %s, has been terminated!", instance.id)
 
-    def reboot_instance(self, instance_id: str, wait_for_status: bool = True):
-        """Terminates an instance. The request returns immediately. To wait for the
-        instance to terminate, use Instance.wait_until_terminated().
+    def reboot_instance(
+        self,
+        instance_obj,
+        ssh_client: paramiko.SSHClient,
+        username: str,
+        wait_for_status_ok: bool = True,
+        start_rebooting_timeout_sec: int = 45,
+        finish_rebooting_timeout_sec: int = 240,
+        poll_interval_sec: int = 2,
+    ):
+        """Reboots an instance. The mechanism for verifying that the instance has reboot used in
+        this method is necessary, because AWS EC2 instances actually don't have any status which
+        indicates if an instance is rebooting - it always stays in a running state and with all
+        checks passed. As a result, the ugly-ish mechanism in this method becomes necessary;
+        it is as follows: 1) wait for the SSH session to become closed, which indicates that it has
+        started rebooting; 2) wait for a successful establishment of a new SSH session, which
+        indicates that the instance has finished rebooting.
 
         Parameters
         ----------
-        instance_id : str
-            The ID of the instance to terminate.
-        wait_for_status : bool
+        instance_obj : ec2.Instance
+            The Instance object of the instance to reboot.
+        wait_for_status_ok : bool
             Controls whether the method waits for the instance to pass its status checks. Defaults
             to True.
+        ssh_client : paramiko.SSHClient
+            The SSHClient object with an active session to the instance.
+        username : str
+            The username to log in the instance with.
+        start_rebooting_timeout_sec : int
+            The timeout, in seconds, to wait for the instance to start rebooting. The mechanism for
+            this is to have the SSH session closed. Defaults to 30s.
+        finish_rebooting_timeout_sec : int
+            The timeout, in seconds, to wait for the instance to finish rebooting. The mechanism for
+            this is to be able to establish a new SSH session after rebooting. Defaults to 120s.
+        poll_interval_sec : int
+            The interval, in seconds, to poll for started/finished rebooting. Defaults to 2s.
         """
-        logging.info("Rebooting the instance: %s...", instance_id)
-        self.client.reboot_instances(InstanceIds=[instance_id])
-        if wait_for_status:
+        logging.info("Rebooting the instance: %s...", instance_obj.id)
+        self.client.reboot_instances(InstanceIds=[instance_obj.id])
+
+        timeout = time.time() + start_rebooting_timeout_sec
+        while time.time() < timeout:
+            try:
+                ssh_client.exec_command("pwd")
+            # pylint: disable=broad-except
+            except Exception as exc:
+                logging.info(exc)
+                break
+            else:
+                time.sleep(poll_interval_sec)
+        else:
+            raise UserWarning("Could not wait for the instance to start rebooting!")
+
+        if wait_for_status_ok:
             logging.info(
-                "Starting to wait for instance with ID: %s, to pass its status checks...",
-                instance_id,
+                "Starting to wait for instance with ID: %s, to finish rebooting...",
+                instance_obj.id,
             )
-            self.client.get_waiter("instance_status_ok").wait(InstanceIds=[instance_id])
-            logging.info(
-                "Instance with ID: %s, has passed its status checks!", instance_id
-            )
+            timeout = time.time() + finish_rebooting_timeout_sec
+            while time.time() < timeout:
+                try:
+                    ssh_client.connect(
+                        hostname=instance_obj.public_dns_name,
+                        username=username,
+                        key_filename=instance_obj.key_name + ".pem",
+                    )
+                # pylint: disable=broad-except
+                except Exception:
+                    time.sleep(poll_interval_sec)
+                else:
+                    break
+            else:
+                raise UserWarning(
+                    "Could not wait for the instance to finish rebooting!"
+                )
