@@ -3,7 +3,8 @@ operations measurements info and prints the formatted results."""
 import json
 import logging
 
-from settings import LOGGING_LEVEL, InstanceInformation, InstanceOperationsMeasurements
+from settings import LOGGING_LEVEL
+from utilities.enums_dataclasses import InstanceInformation, InstanceOperationsMeasurements
 
 logging.basicConfig(level=LOGGING_LEVEL)
 

@@ -1,5 +1,7 @@
 """This module contains common Enum classes used within the project."""
+from dataclasses import dataclass
 from enum import Enum
+from typing import Optional
 
 
 class AWSServices(Enum):
@@ -28,3 +30,32 @@ class AWSEC2FreeTierInstanceTypes(Enum):
     """Contains constants for free tier instance types."""
 
     T2_MICRO = "t2.micro"
+
+
+@dataclass
+class InstanceInformation:
+    """Contains relevant information regarding a given EC2 instance."""
+
+    id: str
+    platform: str
+    image_id: str
+    architecture: str
+
+
+@dataclass
+class InstanceOperationsMeasurements:
+    """Contains the operations measurement results."""
+
+    create_elapsed_ms: int
+    copy_elapsed_ms: int
+    delete_elapsed_ms: int
+
+
+@dataclass
+class InstanceToCreate:
+    """Contains information about a given instance to be created."""
+
+    ami_id: AWSEC2FreeTierAMIs
+    username: DefaultAMIUsernames
+    key_pair_name: Optional[str] = None
+    security_group_name: Optional[str] = None

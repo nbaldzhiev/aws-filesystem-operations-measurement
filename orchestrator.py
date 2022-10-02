@@ -16,26 +16,37 @@ from settings import (
     PERFORM_MEASUREMENTS_BASH_SCRIPT,
     RESULTS_FILENAME,
     SETUP_CRON_BASH_SCRIPT,
-    InstanceOperationsMeasurements,
 )
-from utilities import EC2, AWSEC2FreeTierAMIs, DefaultAMIUsernames
+from utilities import (
+    EC2,
+    AWSEC2FreeTierAMIs,
+    DefaultAMIUsernames,
+    InstanceOperationsMeasurements,
+    InstanceToCreate,
+)
 
 logging.basicConfig(level=LOGGING_LEVEL)
 
 
 class Orchestrator:
-    """This class serves as the orchestrator for performing the filesystem operations."""
+    """This class serves as the orchestrator for managing the EC2 instances and
+    performing the filesystem operations.
 
-    DEFAULT_AMIS_TO_CREATE = [
-        {
-            "ami_id": AWSEC2FreeTierAMIs.AMAZON_LINUX_2,
-            "username": DefaultAMIUsernames.AMAZON_LINUX,
-        },
-        {"ami_id": AWSEC2FreeTierAMIs.RHEL_8, "username": DefaultAMIUsernames.RHEL},
-        {
-            "ami_id": AWSEC2FreeTierAMIs.UBUNTU_SERVER_22_04,
-            "username": DefaultAMIUsernames.UBUNTU,
-        },
+    Note: The class is meant to be used as a context manager! Upon entering the context manager,
+    the specified instances get created, including a new key pair and a new security group for each,
+    together with an active SSH session to them.
+    Upon exiting the context manager, each instance, key pair, security group, SSH session get
+    deleted/closed.
+    """
+
+    DEFAULT_INSTANCES_TO_CREATE = [
+        InstanceToCreate(
+            ami_id=AWSEC2FreeTierAMIs.AMAZON_LINUX_2, username=DefaultAMIUsernames.AMAZON_LINUX
+        ),
+        InstanceToCreate(ami_id=AWSEC2FreeTierAMIs.RHEL_8, username=DefaultAMIUsernames.RHEL),
+        InstanceToCreate(
+            ami_id=AWSEC2FreeTierAMIs.UBUNTU_SERVER_22_04, username=DefaultAMIUsernames.UBUNTU
+        ),
     ]
     # Used as a timeout for both the creation of the file and for the completion of all operations
     RESULTS_TIMEOUT_SEC = 600
@@ -47,7 +58,7 @@ class Orchestrator:
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
         config: Optional[Config] = None,
-        amis_to_create: Optional[List[Dict]] = None,
+        instances_to_create: Optional[List[InstanceToCreate]] = None,
     ):
         self.ec2: EC2 = EC2(
             aws_access_key_id=aws_access_key_id,
@@ -55,26 +66,34 @@ class Orchestrator:
             aws_region_name=aws_region_name,
             config=config,
         )
-        self._amis_to_create = (
-            amis_to_create if amis_to_create else type(self).DEFAULT_AMIS_TO_CREATE
+        self._instances_to_create: List[InstanceToCreate] = (
+            instances_to_create if instances_to_create else type(self).DEFAULT_INSTANCES_TO_CREATE
         )
         # A list of dictionaries where each dict contains the created instance object together with
         # the username to log on the instance with
         self.created_instances: List[Dict] = []
+        # A dictionary where keys are instance IDs and values - SSH client objects related to the
+        # those instance IDs
         self.established_ssh_connections: Dict = {}
 
     def __enter__(self) -> Orchestrator:
-        """Creates the VMs based on the AMIs provided in self._amis_to_create, establishes an SSH
-        connection to each instance, and returns the class instance upon entering the class as a
-        context manager."""
-        for ami in self._amis_to_create:
-            instance = self.ec2.create_instance(image_id=ami["ami_id"])
+        """Creates the VMs based on the AMIs provided in self.instances_to_create,
+        establishes an SSH connection to each instance, and returns the class instance upon
+        entering the class as a context manager."""
+        for instance_to_create in self._instances_to_create:
+            instance = self.ec2.create_instance(
+                image_id=instance_to_create.ami_id,
+                key_name=instance_to_create.key_pair_name,
+                security_group_name=instance_to_create.security_group_name,
+            )
             logging.info(
                 "Successfully established a SSH connection to instance: %s with public DNS of: %s.",
                 instance.id,
                 instance.public_dns_name,
             )
-            self.created_instances.append({"instance": instance, "username": ami["username"].value})
+            self.created_instances.append(
+                {"instance": instance, "username": instance_to_create.username.value}
+            )
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

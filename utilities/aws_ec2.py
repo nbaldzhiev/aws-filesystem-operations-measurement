@@ -10,8 +10,13 @@ import paramiko
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from settings import LOGGING_LEVEL, DefaultAWSEC2Credentials, InstanceInformation
-from utilities.enums import AWSEC2FreeTierAMIs, AWSEC2FreeTierInstanceTypes, AWSServices
+from settings import LOGGING_LEVEL, DefaultAWSEC2Credentials
+from utilities.enums_dataclasses import (
+    AWSEC2FreeTierAMIs,
+    AWSEC2FreeTierInstanceTypes,
+    AWSServices,
+    InstanceInformation,
+)
 
 logging.basicConfig(level=LOGGING_LEVEL)
 
@@ -146,7 +151,7 @@ class EC2:
         self,
         image_id: AWSEC2FreeTierAMIs,
         key_name: Optional[str] = None,
-        security_group: Optional[str] = None,
+        security_group_name: Optional[str] = None,
         wait_for_status_ok: bool = True,
     ):
         """Creates a new Amazon EC2 instance. The instance automatically starts immediately after
@@ -159,7 +164,7 @@ class EC2:
         key_name : Optional[str]
             The name of the key pair. Optional, so the function creates a unique key pair if none is
             provided.
-        security_group : Optional[str]
+        security_group_name : Optional[str]
             The name of the security group to use. Optional, so the function creates a security
             group part of the default VPC with SSH ingress traffic allowed if none is provided.
         wait_for_status_ok : bool
@@ -173,7 +178,11 @@ class EC2:
         """
 
         key_name = key_name if key_name else self.create_key_pair()[1]
-        groups = security_group if security_group else [self.create_security_group_with_ssh()[1]]
+        groups = (
+            security_group_name
+            if security_group_name
+            else [self.create_security_group_with_ssh()[1]]
+        )
 
         try:
             instance_params = {

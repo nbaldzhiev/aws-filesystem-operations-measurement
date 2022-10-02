@@ -1,6 +1,5 @@
 """This module contains common settings across the project"""
 import os
-from dataclasses import dataclass
 from logging import INFO
 
 LOGGING_LEVEL = INFO
@@ -13,7 +12,8 @@ class DefaultAWSEC2Credentials:
     """This class contains default credentials for establishing a connection to AWS EC2. If the
     appropriate environment variables exist, they are used instead.
 
-    Note: A valid IAM user is required.
+    Note: A valid IAM user is required in order to have an eligible access key ID and secret
+    access key.
     """
 
     DEFAULT_AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "AKIAVCUCA6ZN6TZFZPTW")
@@ -21,22 +21,3 @@ class DefaultAWSEC2Credentials:
         "AWS_SECRET_ACCESS_KEY", "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"
     )
     DEFAULT_AWS_REGION = os.getenv("AWS_REGION", "eu-central-1")
-
-
-@dataclass
-class InstanceInformation:
-    """Contains relevant information regarding a given EC2 instance."""
-
-    id: str
-    platform: str
-    image_id: str
-    architecture: str
-
-
-@dataclass
-class InstanceOperationsMeasurements:
-    """Contains the operations measurement results."""
-
-    create_elapsed_ms: int
-    copy_elapsed_ms: int
-    delete_elapsed_ms: int
