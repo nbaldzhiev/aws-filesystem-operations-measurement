@@ -1,8 +1,12 @@
 """This module contains common settings across the project"""
 import os
+from dataclasses import dataclass
 from logging import INFO
 
 LOGGING_LEVEL = INFO
+PERFORM_MEASUREMENTS_BASH_SCRIPT = "perform_measurements.sh"
+SETUP_CRON_BASH_SCRIPT = "setup_cron.sh"
+RESULTS_FILENAME = "results.txt"
 
 
 class DefaultAWSEC2Credentials:
@@ -17,3 +21,22 @@ class DefaultAWSEC2Credentials:
         "AWS_SECRET_ACCESS_KEY", "6ykNJvARzwaRSNAmLgCbLGCcM5dF3pmM8kBkgQLs"
     )
     DEFAULT_AWS_REGION = os.getenv("AWS_REGION", "eu-central-1")
+
+
+@dataclass
+class InstanceInformation:
+    """Contains relevant information regarding a given EC2 instance."""
+
+    id: str
+    platform: str
+    image_id: str
+    architecture: str
+
+
+@dataclass
+class InstanceOperationsMeasurements:
+    """Contains the operations measurement results."""
+
+    create_elapsed_ms: int
+    copy_elapsed_ms: int
+    delete_elapsed_ms: int

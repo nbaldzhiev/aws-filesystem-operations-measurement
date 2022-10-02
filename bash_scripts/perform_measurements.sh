@@ -13,23 +13,23 @@ for i in $(seq $N_FILES_TO_CREATE); do
 done
 end_time=`date +%s%3N`
 elapsed_time=$((end_time-start_time))
-echo "Creation operation: ${elapsed_time}ms." > results.txt
+echo "CREATE: ${elapsed_time}ms" > results.txt
 
 # Files copy operation
 start_time=`date +%s%3N`
 cp -a source/. destination/
 end_time=`date +%s%3N`
 elapsed_time=$((end_time-start_time))
-echo "Files copy operation: ${elapsed_time}ms." >> results.txt
+echo "COPY: ${elapsed_time}ms" >> results.txt
 
 # Files deletion operation
 start_time=`date +%s%3N`
 rm destination/*
 end_time=`date +%s%3N`
 elapsed_time=$((end_time-start_time))
-echo "Files deletion operation: ${elapsed_time}ms." >> results.txt
+echo "DELETE: ${elapsed_time}ms" >> results.txt
 
 # Cleanup
 rm -rf source/ destination/
 
-echo "DONE!" >> results.txt
+echo "DONE" >> results.txt

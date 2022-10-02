@@ -1,16 +1,23 @@
-"""This module contains the implementation of an orchestrator class."""
+"""This module contains an implementation of the required orchestrator class."""
 from __future__ import annotations
 
 import logging
 import os
 import time
-from typing import Dict, Optional, Tuple
+from re import match
+from typing import Dict, List, Optional
 
 import paramiko
 from botocore.config import Config
 from scp import SCPClient
 
-from settings import LOGGING_LEVEL
+from settings import (
+    LOGGING_LEVEL,
+    PERFORM_MEASUREMENTS_BASH_SCRIPT,
+    RESULTS_FILENAME,
+    SETUP_CRON_BASH_SCRIPT,
+    InstanceOperationsMeasurements,
+)
 from utilities import EC2, AWSEC2FreeTierAMIs, DefaultAMIUsernames
 
 logging.basicConfig(level=LOGGING_LEVEL)
@@ -19,17 +26,17 @@ logging.basicConfig(level=LOGGING_LEVEL)
 class Orchestrator:
     """This class serves as the orchestrator for performing the filesystem operations."""
 
-    # The default AMIs to create. A tuple of tuples where each tuple element contains two elements:
-    # the AMI ID as an AWSEC2FreeTierAMIs attribute and the default OS username as a
-    # DefaultAMIUsernames attribute
-    AMIS_TO_CREATE = (
-        (AWSEC2FreeTierAMIs.AMAZON_LINUX_2, DefaultAMIUsernames.AMAZON_LINUX),
-        (AWSEC2FreeTierAMIs.UBUNTU_SERVER_22_04, DefaultAMIUsernames.UBUNTU),
-        (AWSEC2FreeTierAMIs.RHEL_8, DefaultAMIUsernames.RHEL),
-    )
-    PERFORM_MEASUREMENTS_BASH_SCRIPT = "perform_measurements.sh"
-    SETUP_CRON_BASH_SCRIPT = "setup_cron.sh"
-    RESULTS_FILENAME = "results.txt"
+    DEFAULT_AMIS_TO_CREATE = [
+        {
+            "ami_id": AWSEC2FreeTierAMIs.AMAZON_LINUX_2,
+            "username": DefaultAMIUsernames.AMAZON_LINUX,
+        },
+        {"ami_id": AWSEC2FreeTierAMIs.RHEL_8, "username": DefaultAMIUsernames.RHEL},
+        {
+            "ami_id": AWSEC2FreeTierAMIs.UBUNTU_SERVER_22_04,
+            "username": DefaultAMIUsernames.UBUNTU,
+        },
+    ]
     # Used as a timeout for both the creation of the file and for the completion of all operations
     RESULTS_TIMEOUT_SEC = 600
     RESULTS_INTERVAL_SEC = 5
@@ -40,12 +47,7 @@ class Orchestrator:
         aws_secret_access_key: Optional[str] = None,
         aws_region_name: Optional[str] = None,
         config: Optional[Config] = None,
-        # A tuple of tuples where each tuple element contains two elements:
-        # the AMI ID as an AWSEC2FreeTierAMIs attribute and the default OS username as a
-        # DefaultAMIUsernames attribute
-        amis_to_create: Tuple[
-            Tuple[AWSEC2FreeTierAMIs, DefaultAMIUsernames]
-        ] = AMIS_TO_CREATE,
+        amis_to_create: Optional[List[Dict]] = None,
     ):
         self.ec2: EC2 = EC2(
             aws_access_key_id=aws_access_key_id,
@@ -53,73 +55,70 @@ class Orchestrator:
             aws_region_name=aws_region_name,
             config=config,
         )
-        self._amis_to_create = amis_to_create
+        self._amis_to_create = (
+            amis_to_create if amis_to_create else type(self).DEFAULT_AMIS_TO_CREATE
+        )
         # A list of dictionaries where each dict contains the created instance object together with
         # the username to log on the instance with
-        self.created_instances = []
+        self.created_instances: List[Dict] = []
         self.established_ssh_connections: Dict = {}
 
     def __enter__(self) -> Orchestrator:
-        """Creates the VMs based on the AMIs provided in self.amis_to_create, establishes SSH
+        """Creates the VMs based on the AMIs provided in self._amis_to_create, establishes an SSH
         connection to each instance, and returns the class instance upon entering the class as a
-        context manager"""
+        context manager."""
         for ami in self._amis_to_create:
-            instance_ = self.ec2.create_instance(image_id=ami[0])
+            instance = self.ec2.create_instance(image_id=ami["ami_id"])
             logging.info(
                 "Successfully established a SSH connection to instance: %s with public DNS of: %s.",
-                instance_.id,
-                instance_.public_dns_name,
+                instance.id,
+                instance.public_dns_name,
             )
-            self.created_instances.append(
-                {"instance": instance_, "username": ami[1].value}
-            )
+            self.created_instances.append({"instance": instance, "username": ami["username"].value})
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Closes all SSH sessions, terminates all created EC2 instances, deletes their security
         group and key pairs upon exiting the context manager."""
-        if self.created_instances:
-            for instance_ in self.created_instances:
-                if instance_["instance"].id in self.established_ssh_connections:
-                    self.established_ssh_connections[instance_["instance"].id][
-                        "ssh_client"
-                    ].close()
-                logging.info(
-                    "Successfully closed the SSH section of instance: %s.",
-                    instance_["instance"].id,
-                )
-                self.ec2.terminate_instance(instance_id=instance_["instance"].id)
-                self.ec2.delete_security_group(
-                    # Instances used by this class would only ever be part of one security group,
-                    # hence the access to the 0th index specifically
-                    group_id=instance_["instance"].security_groups[0]["GroupId"]
-                )
-                self.ec2.delete_key_pair(key_name=instance_["instance"].key_name)
+        for instance in self.created_instances:
+            if instance["instance"].id in self.established_ssh_connections:
+                self.established_ssh_connections[instance["instance"].id]["ssh_client"].close()
+            logging.info(
+                "Successfully closed the SSH section of instance: %s.",
+                instance["instance"].id,
+            )
+            self.ec2.terminate_instance(instance_id=instance["instance"].id)
+            self.ec2.delete_security_group(
+                # Instances used by this class would only ever be part of one security group,
+                # hence the access to the 0th index specifically
+                group_id=instance["instance"].security_groups[0]["GroupId"]
+            )
+            self.ec2.delete_key_pair(key_name=instance["instance"].key_name)
 
     @staticmethod
     def _prepare_ssh_client_obj() -> paramiko.SSHClient:
-        """Prepares and returns a SSH client with preloaded known hosts and a pre-configured
+        """Prepares and returns an SSH client with preloaded known hosts and a pre-configured
         missing host key policy.
 
         Returns
         -------
         paramiko.SSHClient
-            An object of type SSHClient.
         """
         ssh_client = paramiko.SSHClient()
         ssh_client.load_system_host_keys()
-        # AutoAddPolicy
         ssh_client.set_missing_host_key_policy(policy=paramiko.client.AutoAddPolicy)
+
         return ssh_client
 
     def connect_ssh(self, instance_obj, username: str) -> paramiko.SSHClient:
-        """Establishes a SSH connection to a given instance and returns a SSHClient object.
+        """Establishes an SSH connection to a given instance and returns a SSHClient object.
+
         Parameters
         ----------
         instance_obj : ec2.Instance
-            The instance to reconnect to as an ec2.Instance object.
+            The instance to connect to as an ec2.Instance object.
         username : str
-            The username to reconnect as.
+            The username to connect as.
 
         Returns
         -------
@@ -140,43 +139,38 @@ class Orchestrator:
             "ssh_client": ssh_client,
             "username": username,
         }
+
         return ssh_client
 
     def transfer_bash_scripts_to_instance(
         self, instance_ssh_client: paramiko.SSHClient
     ) -> Orchestrator:
         """Transfers both bash scripts - the perform operations one and the setup cron one,
-        to the instance related to the SSH session passed as a value to the parameter
-        instance_ssh_client."""
+        to the instance related to the SSH session passed to instance_ssh_client."""
         scp = SCPClient(instance_ssh_client.get_transport())
-        for bash_script in (
-            type(self).PERFORM_MEASUREMENTS_BASH_SCRIPT,
-            type(self).SETUP_CRON_BASH_SCRIPT,
-        ):
+        for bash_script in (PERFORM_MEASUREMENTS_BASH_SCRIPT, SETUP_CRON_BASH_SCRIPT):
             # Give the file full access by anyone to avoid any permission issues whatsoever
             os.chmod("bash_scripts/" + bash_script, 0o0777)
-            # Transfer the bash script over to the instance filesystem
+            # Transfer the script over to the instance at the home of the default user
             scp.put("bash_scripts/" + bash_script)
+
         return self
 
-    def run_setup_cron_bash(
-        self, instance_ssh_client: paramiko.SSHClient
-    ) -> Orchestrator:
-        """Runs the setup cron bash script on the instance related to the SSH session passed as a
-        value to the parameter instance_ssh_client."""
-        instance_ssh_client.exec_command(f"./{type(self).SETUP_CRON_BASH_SCRIPT}")
+    def run_setup_cron_bash_script(self, instance_ssh_client: paramiko.SSHClient) -> Orchestrator:
+        """Runs the setup cron bash script on the instance related to the SSH session passed to
+        the parameter instance_ssh_client."""
+        instance_ssh_client.exec_command(f"./{SETUP_CRON_BASH_SCRIPT}")
         return self
 
     def wait_for_results_file_to_be_created(
         self, instance_ssh_client: paramiko.SSHClient
     ) -> Orchestrator:
         """Waits for the results file to be created on an instance specified by its SSH client,
-        which is passed as the value to the parameter instance_ssh_client."""
+        which is passed to the parameter instance_ssh_client."""
         timeout = time.time() + type(self).RESULTS_TIMEOUT_SEC
         while (
-            instance_ssh_client.exec_command(f"cat {type(self).RESULTS_FILENAME}")[
-                2
-            ].readline()
+            # stderr is at the last index of exec_command's returned 3-tuple
+            instance_ssh_client.exec_command(f"cat {RESULTS_FILENAME}")[-1].readline()
             and time.time() < timeout
         ):
             time.sleep(type(self).RESULTS_INTERVAL_SEC)
@@ -184,22 +178,23 @@ class Orchestrator:
         if time.time() > timeout:
             raise UserWarning("Could not wait for the results file to be created!")
         logging.info("Successfully waited for the results file to be created!")
+
         return self
 
     def wait_for_all_operations_to_complete(
         self, instance_ssh_client: paramiko.SSHClient
     ) -> Orchestrator:
         """Waits for all operations to complete on an instance specified by its SSH client,
-        which is passed as the value to the parameter instance_ssh_client."""
-        self.wait_for_results_file_to_be_created(
-            instance_ssh_client=instance_ssh_client
-        )
+        which is passed to the parameter instance_ssh_client."""
+        self.wait_for_results_file_to_be_created(instance_ssh_client=instance_ssh_client)
+
         timeout = time.time() + type(self).RESULTS_TIMEOUT_SEC
         while (
-            "DONE!"
-            not in instance_ssh_client.exec_command(
-                f"cat {type(self).RESULTS_FILENAME}"
-            )[1].readlines()[-1]
+            # The word DONE is always the last line of a results file when measurements are done
+            "DONE"
+            not in instance_ssh_client.exec_command(f"cat {RESULTS_FILENAME}")[
+                1  # stdin
+            ].readlines()[-1]
             and time.time() < timeout
         ):
             time.sleep(type(self).RESULTS_INTERVAL_SEC)
@@ -207,28 +202,80 @@ class Orchestrator:
         if time.time() > timeout:
             raise UserWarning("Could not wait for all operations to be performed!")
         logging.info("Successfully waited for all filesystem operations to complete")
+
         return self
 
+    @staticmethod
     def transfer_results_to_orchestrator_host(
-        self, instance_ssh_client: paramiko.SSHClient, instance
-    ) -> Dict:
+        instance_ssh_client: paramiko.SSHClient,
+    ) -> str:
         """Transfers the results.txt file from the instance to the orchestrator host in the
-        same directory as this module for simplicity."""
+        same directory as this module.
+
+        Returns
+        -------
+        str
+            The name of the transferred results file.
+        """
         scp = SCPClient(instance_ssh_client.get_transport())
-        hostname = (
-            instance_ssh_client.exec_command("cat /etc/hostname")[1].readline().strip()
-        )
-        target_filename = f"{hostname}-{type(self).RESULTS_FILENAME}"
-        # Transfer the bash script over to the instance filesystem
-        scp.get(type(self).RESULTS_FILENAME, target_filename)
-        logging.info(
-            "Transferred the results file from the instance to this orchestrator host!"
+        hostname = instance_ssh_client.exec_command("cat /etc/hostname")[1].readline().strip()
+        target_filename = f"{hostname}-{RESULTS_FILENAME}"
+        scp.get(RESULTS_FILENAME, target_filename)
+        logging.info("Transferred the results file from the instance to the orchestrator host!")
+
+        return target_filename
+
+    @staticmethod
+    def get_measurements_from_file(filename: str) -> InstanceOperationsMeasurements:
+        """Parses the results file and returns a InstanceOperationsMeasurements object with the
+        operations measurements."""
+        measurements = {}
+        with open(filename, "r") as f:
+            results_file_content = f.readlines()
+            # 0:-1 to exclude the last line, which is the DONE signal
+            for line in results_file_content[0:-1]:
+                operation, elapsed = match(r"([A-Z]+): ([0-9]+)ms", line).groups()
+                measurements[operation] = elapsed
+        # Delete the file after retrieving the results from it
+        os.remove(filename)
+
+        return InstanceOperationsMeasurements(
+            create_elapsed_ms=int(measurements["CREATE"]),
+            copy_elapsed_ms=int(measurements["COPY"]),
+            delete_elapsed_ms=int(measurements["DELETE"]),
         )
 
-        return {
-            "results-filename": target_filename,
-            "instance_id": instance.id,
-            "instance_image_id": instance.image_id,
-            "instance_platform": instance.platform_details,
-            "instance_architecture": instance.architecture,
-        }
+    def run_e2e_flow(self, instance) -> Dict:
+        """Runs the end to end flow, which goes through all steps to run the operations measurements
+         on a given instance and retrieve the results from the instance to the orchestrator host.
+
+        Parameters
+        ----------
+        instance : ec2.Instance
+            The ec2.Instance object where the operations measurements are to be performed and
+            retrieved from.
+
+        Returns
+        -------
+        Dict
+            A dictionary containing two key-value pairs: the parsed operations measurements and
+            the instance information.
+        """
+        ssh = self.connect_ssh(instance_obj=instance["instance"], username=instance["username"])
+        self.transfer_bash_scripts_to_instance(instance_ssh_client=ssh).run_setup_cron_bash_script(
+            instance_ssh_client=ssh
+        ).ec2.reboot_instance(
+            instance_obj=instance["instance"],
+            ssh_client=ssh,
+            username=instance["username"],
+        )
+
+        ssh = self.connect_ssh(instance_obj=instance["instance"], username=instance["username"])
+        results_filename = self.wait_for_all_operations_to_complete(
+            instance_ssh_client=ssh
+        ).transfer_results_to_orchestrator_host(instance_ssh_client=ssh)
+
+        measurements = self.get_measurements_from_file(filename=results_filename)
+        instance_info = self.ec2.get_instance_information(instance=instance["instance"])
+
+        return {"measurements": measurements, "instance_info": instance_info}
