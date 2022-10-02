@@ -16,8 +16,8 @@ class DefaultAWSEC2Credentials:
     access key.
     """
 
-    DEFAULT_AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "AKIAVCUCA6ZN6TZFZPTW")
+    DEFAULT_AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "default_access_key_id")
     DEFAULT_AWS_SECRET_ACCESS_KEY = os.getenv(
-        "AWS_SECRET_ACCESS_KEY", "6ykNJvARzwaRSNAmLgCbLGCcM5dF3pmM8kBkgQLs"
+        "AWS_SECRET_ACCESS_KEY", "default_secret_access_key"
     )
-    DEFAULT_AWS_REGION = os.getenv("AWS_REGION", "eu-central-1")
+    DEFAULT_AWS_REGION = os.getenv("AWS_REGION", "default_aws_region")
