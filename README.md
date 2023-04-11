@@ -38,7 +38,7 @@ each 1MB in size (not configurable).
 
 ## Notable external packages used
 
-* [boto3](https://github.com/boto/boto3) - providing an AWS SDK for Python.
-* [paramiko](https://www.paramiko.org/) - providing SSH client implementation in Python;
-* [click](https://github.com/pallets/click) - providing Python CLI toolkit;
-* [scp](https://github.com/jbardin/scp.py) - providing SCP client implementation in Python.
+* [@slack/web-api](https://www.npmjs.com/package/@slack/web-api) - provides Slack's Web-API for Node.js;
+* [mochawesome](https://www.npmjs.com/package/mochawesome) - provides an HTML report of the test results;
+* [mochawesome-report-generator](https://www.npmjs.com/package/mochawesome-report-generator) - allows for generating a unified Mochawesome report;
+* [mochawesome-merge](https://www.npmjs.com/package/mochawesome-merge) - allows for merging of multiple Mochawesome JSON reports into one.
